@@ -1,0 +1,55 @@
+# Bouwt bij elke wijziging automatisch een installatiebestand (APK) voor Android
+# en zet het bij Releases. Downloadlink op je gsm:
+#   https://github.com/<jouw-naam>/<repo>/releases/latest/download/licht.apk
+name: Android-app bouwen
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Onderdelen installeren
+        run: npm ci
+
+      - name: Android-project maken
+        run: npx expo prebuild --platform android --no-install
+        env:
+          CI: 1
+
+      - name: APK bouwen
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
+
+      - name: Bestand klaarzetten
+        run: cp android/app/build/outputs/apk/release/app-release.apk licht.apk
+
+      - name: Release maken
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Licht ${{ github.run_number }}
+          body: Tik op licht.apk om te downloaden en te installeren.
+          files: licht.apk
+          make_latest: true

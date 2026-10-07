@@ -1,0 +1,32 @@
+export const C = {
+  bg: '#F4F6F1',
+  card: '#FFFFFF',
+  ink: '#16211B',
+  muted: '#55615A',
+  line: '#E3E8E1',
+  lineStrong: '#D5DDD6',
+  green: '#2F7D4F',
+  greenDark: '#235E3B',
+  greenSoft: '#E5F1E9',
+  greenText: '#2C4A37',
+  blue: '#2F5FA8',
+  blueSoft: '#E6EEF8',
+  blueMid: '#7FA3D6',
+  blueLine: '#C9D7EA',
+  blueText: '#44536A',
+  dark: '#16211B',
+  darkMuted: '#B8C7BE',
+  camera: '#0F1512',
+  cameraAccent: '#7FD49B',
+  warn: '#B4561B',
+  warnSoft: '#FBEDE3',
+};
+
+export const F = {
+  display: 'BricolageGrotesque_700Bold',
+  displaySemi: 'BricolageGrotesque_600SemiBold',
+  body: 'DMSans_400Regular',
+  medium: 'DMSans_500Medium',
+  semi: 'DMSans_600SemiBold',
+  bold: 'DMSans_700Bold',
+};
