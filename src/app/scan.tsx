@@ -1,7 +1,7 @@
 import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -17,8 +17,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 
 import { fmt } from '@/calc';
+import { BasisItem, searchBasis } from '@/data/basis';
 import { estimateFromPhoto, estimateFromText, lookupBarcode, searchFoods, validBarcode } from '@/food';
 import { FoodItem, PendingFood, useStore } from '@/store';
+import { showError } from '@/errors';
 import { C, F } from '@/theme';
 import { IconButton, PrimaryButton } from '@/ui';
 
@@ -29,6 +31,36 @@ const MODES: { id: Mode; label: string }[] = [
   { id: 'barcode', label: 'Barcode' },
   { id: 'zoeken', label: 'Zoeken' },
 ];
+
+type Origin = 'basis' | 'eigen' | 'opgeslagen' | 'online';
+interface Result {
+  item: FoodItem;
+  origin: Origin;
+}
+
+const ORIGIN_LABEL: Record<Origin, string> = {
+  basis: 'Gemiddelde waarde',
+  eigen: 'Jouw product',
+  opgeslagen: 'Eerder gescand',
+  online: '',
+};
+
+const SOURCE: Record<Origin, PendingFood['source']> = {
+  basis: 'basis',
+  eigen: 'eigen',
+  opgeslagen: 'barcode',
+  online: 'zoeken',
+};
+
+function basisToItem(b: BasisItem): FoodItem {
+  return {
+    name: b.name,
+    per100: { kcal: b.kcal, protein: b.protein, carbs: b.carbs, fat: b.fat, fiber: b.fiber },
+    grams: b.grams,
+    step: b.countable ? b.grams : 10,
+    servingLabel: b.label ? `${b.label} = ${b.grams} g` : undefined,
+  };
+}
 
 function TorchIcon({ on }: { on: boolean }) {
   return (
@@ -55,7 +87,30 @@ export default function Scan() {
   const setPending = useStore((s) => s.setPending);
 
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<FoodItem[] | null>(null);
+  const products = useStore((s) => s.products);
+  const [online, setOnline] = useState<{ q: string; items: FoodItem[] } | null>(null);
+
+  // Ingebouwde lijst en je eigen producten: meteen tijdens het typen, ook zonder internet.
+  const local = useMemo<Result[]>(() => {
+    const q = query.trim();
+    if (q.length < 2) return [];
+    const words = q.toLowerCase().split(/\s+/);
+    const own = Object.values(products)
+      .filter((p) => words.every((w) => `${p.name} ${p.brand ?? ''}`.toLowerCase().includes(w)))
+      .slice(0, 6)
+      .map((p) => ({ item: { ...p } as FoodItem, origin: (p.own ? 'eigen' : 'opgeslagen') as Origin }));
+    return [...own, ...searchBasis(q).map((b) => ({ item: basisToItem(b), origin: 'basis' as Origin }))];
+  }, [query, products]);
+
+  const results: Result[] = [
+    ...local,
+    ...(online && online.q === query.trim()
+      ? online.items
+          .filter((i) => !local.some((l) => l.item.name.toLowerCase() === i.name.toLowerCase()))
+          .map((item) => ({ item, origin: 'online' as Origin }))
+      : []),
+  ];
+  const searched = online !== null && online.q === query.trim();
 
   const mealParam = meal ? { meal } : {};
 
@@ -155,19 +210,21 @@ export default function Scan() {
       }
       open({ source: 'foto', items: res.items, note: res.note });
     } catch (e) {
-      Alert.alert('Dat lukte niet', e instanceof Error ? e.message : String(e));
+      showError(e);
     } finally {
       setBusy(null);
     }
   };
 
   const search = async () => {
-    if (query.trim().length < 2) return;
-    setBusy('Zoeken…');
+    const q = query.trim();
+    if (q.length < 2) return;
+    setBusy('Online zoeken…');
     try {
-      setResults(await searchFoods(query.trim()));
+      setOnline({ q, items: await searchFoods(q) });
     } catch {
-      Alert.alert('Geen verbinding', 'Zoeken lukte niet. Controleer je internet.');
+      setOnline({ q, items: [] });
+      if (local.length === 0) Alert.alert('Geen verbinding', 'Online zoeken lukte niet. Controleer je internet.');
     } finally {
       setBusy(null);
     }
@@ -184,7 +241,7 @@ export default function Scan() {
       }
       open({ source: 'schatting', items: res.items, note: res.note });
     } catch (e) {
-      Alert.alert('Dat lukte niet', e instanceof Error ? e.message : String(e));
+      showError(e);
     } finally {
       setBusy(null);
     }
@@ -241,7 +298,8 @@ export default function Scan() {
           ) : mode === 'foto' && !apiKey ? (
             <View style={st.center}>
               <Text style={st.hint}>
-                Foto’s van je bord worden ingeschat door Claude. Daarvoor heb je een eigen API-sleutel nodig.
+                Foto’s van je bord worden ingeschat door Claude. Daarvoor heb je eenmalig een eigen API-sleutel nodig. In de
+                instellingen staat stap voor stap hoe je die krijgt.
               </Text>
               <View style={{ width: 220 }}>
                 <PrimaryButton label="Sleutel instellen" onPress={() => router.push('/instellingen')} />
@@ -330,29 +388,42 @@ export default function Scan() {
           ) : null}
           {busy ? <ActivityIndicator color="#fff" /> : null}
           <FlatList
-            data={results ?? []}
-            keyExtractor={(i, n) => `${i.name}-${n}`}
+            data={results}
+            keyExtractor={(r, n) => `${r.origin}-${r.item.name}-${n}`}
             keyboardShouldPersistTaps="handled"
             ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.08)' }} />}
             ListEmptyComponent={
-              results && !busy ? <Text style={st.hint}>Niets gevonden. Probeer een ander woord of laat het inschatten.</Text> : null
+              searched && !busy ? (
+                <Text style={st.hint}>Niets gevonden. Probeer een ander woord of laat het inschatten.</Text>
+              ) : query.trim().length >= 2 && !busy ? (
+                <Text style={st.hint}>Druk op Zoek om ook online te zoeken.</Text>
+              ) : null
             }
             ListFooterComponent={
-              results ? (
+              query.trim().length >= 2 ? (
+                <View>
+                  {!searched && results.length > 0 && !busy ? (
+                    <Pressable onPress={search} style={[st.result, { justifyContent: 'center' }]}>
+                      <Text style={[st.segTxt, { color: '#fff' }]}>Meer zoeken in de online database</Text>
+                    </Pressable>
+                  ) : null}
                 <Pressable
                   onPress={() => router.replace({ pathname: '/nieuw-product', params: { code: '', name: query.trim(), ...mealParam } })}
                   style={[st.result, { justifyContent: 'center' }]}>
                   <Text style={[st.segTxt, { color: C.cameraAccent }]}>Niet bij? Zelf een product invullen</Text>
                 </Pressable>
+                </View>
               ) : null
             }
-            renderItem={({ item }) => (
-              <Pressable onPress={() => open({ source: 'zoeken', items: [item] })} style={st.result}>
+            renderItem={({ item: { item, origin } }) => (
+              <Pressable onPress={() => open({ source: SOURCE[origin], items: [{ ...item }] })} style={st.result}>
                 <View style={{ flex: 1 }}>
                   <Text style={st.resultName} numberOfLines={2}>
                     {item.name}
                   </Text>
-                  {item.brand ? <Text style={st.resultSub}>{item.brand}</Text> : null}
+                  <Text style={st.resultSub} numberOfLines={1}>
+                    {[ORIGIN_LABEL[origin], item.brand].filter(Boolean).join(' · ')}
+                  </Text>
                 </View>
                 <Text style={st.resultSub}>{fmt(item.per100.kcal)} kcal/100 g</Text>
               </Pressable>

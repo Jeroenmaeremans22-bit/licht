@@ -1,6 +1,7 @@
 // Voedingsgegevens ophalen: Open Food Facts (barcode en zoeken) en een
 // optionele inschatting van foto's of tekst via Claude.
 
+import { askClaude, parseJson } from './claude';
 import type { FoodItem, Per100 } from './store';
 
 const OFF_HEADERS = { 'User-Agent': 'Licht-Afvalapp/1.1 (Android; persoonlijk gebruik)' };
@@ -263,20 +264,19 @@ export async function searchFoods(query: string): Promise<FoodItem[]> {
   return dedupe(await searchClassic(query));
 }
 
-// ---------- Claude: foto, etiket of tekst laten lezen ----------
+// ---------- Claude: foto, verpakking of tekst laten lezen ----------
 
-const CLAUDE_MODEL = 'claude-sonnet-5-5';
-
-const ESTIMATE_PROMPT = `Je bent een voedingsassistent in een afslank-app. Schat wat er gegeten wordt en geef per onderdeel het geschatte gewicht in gram en de voedingswaarden PER 100 GRAM.
+const ESTIMATE_PROMPT = `Je bent een voedingsassistent in een afslank-app voor een Belgische gebruiker. Schat wat er gegeten wordt en geef per onderdeel het geschatte gewicht in gram en de voedingswaarden PER 100 GRAM.
 Antwoord ALLEEN met JSON, zonder uitleg eromheen, in exact dit formaat:
 {"items":[{"name":"Nederlandse naam","grams":150,"kcal100":120,"protein100":5,"carbs100":15,"fat100":4}],"note":"korte opmerking in het Nederlands, bv. waar je onzeker over bent"}
-Wees realistisch over portiegroottes. Als je niets eetbaars ziet, geef een lege items-lijst en leg het uit in note.`;
+Wees realistisch over portiegroottes (let op bordgrootte, bestek en verpakkingen als referentie). Vergeet sauzen, olie en dressing niet. Als je niets eetbaars ziet, geef een lege items-lijst en leg het uit in note.`;
 
-const LABEL_PROMPT = `Je leest de voedingswaardetabel op een verpakking. Neem de waarden PER 100 g (of per 100 ml) exact over van het etiket, niet schatten.
-Staat er alleen een waarde per portie, reken dan om naar 100 g met het portiegewicht op het etiket.
+const PACKAGE_PROMPT = `Je krijgt een foto van een verpakking van een voedingsmiddel.
+- Is de voedingswaardetabel zichtbaar: neem de waarden PER 100 g (of 100 ml) EXACT over. Staat er alleen een waarde per portie, reken om met het portiegewicht. Zet "source" op "etiket".
+- Is er geen tabel zichtbaar: herken het product (merk en naam) en geef de typische voedingswaarden per 100 g van dat product. Zet "source" op "schatting".
 Antwoord ALLEEN met JSON, zonder uitleg, in exact dit formaat:
-{"name":"productnaam als die zichtbaar is, anders null","kcal100":250,"protein100":8,"carbs100":30,"fat100":10,"fiber100":3,"servingGrams":30,"note":"korte opmerking in het Nederlands, of null"}
-Gebruik null voor waarden die je niet kan lezen. Is er geen voedingswaardetabel te zien, zet kcal100 op null en leg het uit in note.`;
+{"name":"productnaam met merk, of null","source":"etiket","kcal100":250,"protein100":8,"carbs100":30,"fat100":10,"fiber100":3,"servingGrams":30,"note":"korte opmerking in het Nederlands, of null"}
+Gebruik null voor waarden die je niet kent. Herken je helemaal niets, zet kcal100 op null en leg het uit in note.`;
 
 interface ClaudeItem {
   name?: unknown;
@@ -287,32 +287,8 @@ interface ClaudeItem {
   fat100?: unknown;
 }
 
-async function askClaude(apiKey: string, system: string, content: unknown[]): Promise<unknown> {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: 1024,
-      system,
-      messages: [{ role: 'user', content }],
-    }),
-  });
-  if (res.status === 401) throw new Error('De API-sleutel klopt niet. Kijk ze na bij Doel › Instellingen.');
-  if (!res.ok) throw new Error(`Inlezen mislukt (fout ${res.status}). Probeer opnieuw.`);
-  const json = (await res.json()) as { content?: { type: string; text?: string }[] };
-  const text = (json.content ?? []).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('');
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('Kon het antwoord niet lezen. Probeer opnieuw.');
-  return JSON.parse(match[0]);
-}
-
 async function estimate(apiKey: string, content: unknown[]): Promise<{ items: FoodItem[]; note?: string }> {
-  const parsed = (await askClaude(apiKey, ESTIMATE_PROMPT, content)) as { items?: ClaudeItem[]; note?: unknown };
+  const parsed = parseJson<{ items?: ClaudeItem[]; note?: unknown }>(await askClaude(apiKey, ESTIMATE_PROMPT, content));
   const items: FoodItem[] = (parsed.items ?? [])
     .map((i) => ({
       name: String(i.name ?? 'Onbekend'),
@@ -342,20 +318,25 @@ export function estimateFromText(apiKey: string, description: string) {
 
 export interface LabelValues {
   name?: string;
+  /** "etiket" = overgenomen van de tabel, "schatting" = product herkend en ingeschat. */
+  source: 'etiket' | 'schatting';
   per100: Partial<Per100>;
   servingGrams?: number;
   note?: string;
 }
 
-/** Leest de voedingswaardetabel van een foto van het etiket. */
+/** Leest de voedingswaarden van een foto van de verpakking (tabel of voorkant). */
 export async function readLabel(apiKey: string, base64Jpeg: string): Promise<LabelValues> {
-  const p = (await askClaude(apiKey, LABEL_PROMPT, [
-    { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64Jpeg } },
-    { type: 'text', text: 'Lees de voedingswaarden van dit etiket.' },
-  ])) as Record<string, unknown>;
+  const p = parseJson<Record<string, unknown>>(
+    await askClaude(apiKey, PACKAGE_PROMPT, [
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64Jpeg } },
+      { type: 'text', text: 'Welke voedingswaarden heeft dit product?' },
+    ]),
+  );
   const opt = (v: unknown) => (v === null || v === undefined || v === '' ? undefined : num(v));
   return {
-    name: typeof p.name === 'string' && p.name.trim() ? p.name.trim() : undefined,
+    name: typeof p.name === 'string' && p.name.trim() && p.name !== 'null' ? p.name.trim() : undefined,
+    source: p.source === 'schatting' ? 'schatting' : 'etiket',
     per100: {
       kcal: opt(p.kcal100),
       protein: opt(p.protein100),
@@ -364,6 +345,6 @@ export async function readLabel(apiKey: string, base64Jpeg: string): Promise<Lab
       fiber: opt(p.fiber100),
     },
     servingGrams: opt(p.servingGrams) || undefined,
-    note: typeof p.note === 'string' ? p.note : undefined,
+    note: typeof p.note === 'string' && p.note !== 'null' ? p.note : undefined,
   };
 }

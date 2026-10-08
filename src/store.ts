@@ -44,7 +44,7 @@ export interface FoodItem {
 }
 
 export interface PendingFood {
-  source: 'barcode' | 'foto' | 'zoeken' | 'schatting' | 'eigen';
+  source: 'barcode' | 'foto' | 'zoeken' | 'schatting' | 'eigen' | 'basis';
   items: FoodItem[];
   note?: string;
 }

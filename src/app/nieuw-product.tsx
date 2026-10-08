@@ -6,6 +6,7 @@ import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-nativ
 
 import { readLabel } from '@/food';
 import { FoodItem, useStore } from '@/store';
+import { showError } from '@/errors';
 import { C, F } from '@/theme';
 import { Body, Card, Grid, IconButton, Muted, PrimaryButton, Row, Screen, Strong, TextButton, Title } from '@/ui';
 
@@ -87,7 +88,7 @@ export default function NieuwProduct() {
       if (!out.base64) throw new Error('Kon de foto niet verwerken.');
       const r = await readLabel(apiKey, out.base64);
       if (r.per100.kcal === undefined) {
-        Alert.alert('Geen tabel gevonden', r.note ?? 'Fotografeer de voedingswaardetabel van dichtbij, recht en met goed licht.');
+        Alert.alert('Niet herkend', r.note ?? 'Fotografeer de voedingswaardetabel of de voorkant van dichtbij, met goed licht.');
         return;
       }
       if (r.name && !name) setName(r.name);
@@ -97,9 +98,13 @@ export default function NieuwProduct() {
       setFat(show(r.per100.fat));
       setFiber(show(r.per100.fiber));
       if (r.servingGrams && !portion) setPortion(show(r.servingGrams));
-      setNote(r.note ?? 'Waarden overgenomen van het etiket. Kijk ze even na.');
+      const base =
+        r.source === 'etiket'
+          ? 'Waarden overgenomen van het etiket. Kijk ze even na.'
+          : 'Product herkend en waarden ingeschat. Staat de voedingswaardetabel op de verpakking, fotografeer die dan voor exacte cijfers.';
+      setNote(r.note ? `${base} ${r.note}` : base);
     } catch (e) {
-      Alert.alert('Dat lukte niet', e instanceof Error ? e.message : String(e));
+      showError(e);
     } finally {
       setBusy(false);
     }
@@ -149,9 +154,12 @@ export default function NieuwProduct() {
 
       {apiKey ? (
         <Card style={{ gap: 10, borderWidth: 2, borderColor: C.greenSoft }}>
-          <Strong>Snelst: fotografeer het etiket</Strong>
-          <Muted style={{ fontSize: 13 }}>Neem de voedingswaardetabel op de verpakking, recht en van dichtbij.</Muted>
-          <PrimaryButton label="Foto van het etiket" onPress={photoLabel} loading={busy} />
+          <Strong>Snelst: fotografeer de verpakking</Strong>
+          <Muted style={{ fontSize: 13 }}>
+            Liefst de voedingswaardetabel, recht en van dichtbij: dan zijn de cijfers exact. Een foto van de voorkant kan ook, dan
+            worden de waarden ingeschat.
+          </Muted>
+          <PrimaryButton label="Foto van de verpakking" onPress={photoLabel} loading={busy} />
         </Card>
       ) : (
         <View style={{ backgroundColor: C.blueSoft, borderRadius: 14, padding: 12, gap: 4 }}>

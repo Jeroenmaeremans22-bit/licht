@@ -9,7 +9,7 @@ Licht helpt je afvallen. Bij de eerste keer openen stelt de app een paar vragen 
 - **Beweging**: stappen, actieve calorieën, afstand en trainingen komen uit Health Connect. Dat is de plek waar je gsm, smartwatch en sport-apps hun gegevens samenbrengen. 75% van je actieve calorieën komt bij je budget, omdat trackers vaak wat te hoog schatten.
 - **Eten toevoegen**:
   - **Barcode scannen**: de voedingswaarden komen gratis uit Open Food Facts. Met zaklamp en de mogelijkheid om de cijfers in te typen. Staat een product er niet (volledig) in, dan vul je het één keer zelf in of laat je het etiket lezen van een foto. Daarna vindt de app het altijd meteen terug, ook zonder internet.
-  - **Zoeken op naam**: ook via Open Food Facts, met Belgische producten eerst.
+  - **Zoeken op naam**: eerst in een ingebouwde lijst van ± 180 gewone voedingsmiddelen en Belgische gerechten (werkt zonder internet), dan in je eigen producten en daarna online in Open Food Facts.
   - **Foto van je bord** of een omschrijving (bv. “2 sneetjes met kaas”): wordt ingeschat door Claude. Daarvoor heb je een eigen API-sleutel nodig, zie onderaan.
 - **Vandaag**: hoeveel je nog mag eten, je eiwitten, koolhydraten en vetten, je stappen en je maaltijden.
 - **Doel**: gewicht bijhouden, doel en tempo aanpassen, vragen opnieuw invullen.
@@ -65,8 +65,12 @@ Op Android 14 en nieuwer zit Health Connect in je instellingen, onder *Beveiligi
 
 ## Foto's laten inschatten (optioneel)
 
-1. Maak een API-sleutel aan op https://console.anthropic.com/settings/keys en zet er wat tegoed op.
-2. Ga in de app naar **Doel › Instellingen** en plak de sleutel.
+Daarvoor heb je een API-sleutel van Anthropic nodig. Dat is los van een Claude-abonnement.
+
+1. Ga naar https://console.anthropic.com en maak een account.
+2. Ga naar **Billing** en zet tegoed op (bv. $5). Zonder tegoed werkt de sleutel niet.
+3. Ga naar **API keys**, maak een sleutel en kopieer ze.
+4. Ga in de app naar **Doel › Instellingen**, tik op **Plakken** en dan op **Opslaan en testen**. De app zegt meteen of alles werkt, en zo niet, wat er mis is.
 
 Een foto inschatten kost meestal minder dan een cent. Barcodes scannen en zoeken werkt ook zonder sleutel.
 

@@ -16,6 +16,7 @@ const SOURCE_LABEL = {
   zoeken: 'Uit de database',
   schatting: 'Ingeschat uit je omschrijving',
   eigen: 'Je eigen product',
+  basis: 'Gemiddelde waarden',
 } as const;
 
 function amountLabel(i: FoodItem): string {
