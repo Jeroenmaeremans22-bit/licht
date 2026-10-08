@@ -15,6 +15,7 @@ const SOURCE_LABEL = {
   foto: 'Ingeschat van je foto',
   zoeken: 'Uit de database',
   schatting: 'Ingeschat uit je omschrijving',
+  eigen: 'Je eigen product',
 } as const;
 
 function amountLabel(i: FoodItem): string {

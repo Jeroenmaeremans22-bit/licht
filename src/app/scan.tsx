@@ -10,12 +10,14 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  Vibration,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Svg, { Path } from 'react-native-svg';
 
 import { fmt } from '@/calc';
-import { estimateFromPhoto, estimateFromText, lookupBarcode, searchFoods } from '@/food';
+import { estimateFromPhoto, estimateFromText, lookupBarcode, searchFoods, validBarcode } from '@/food';
 import { FoodItem, PendingFood, useStore } from '@/store';
 import { C, F } from '@/theme';
 import { IconButton, PrimaryButton } from '@/ui';
@@ -28,13 +30,25 @@ const MODES: { id: Mode; label: string }[] = [
   { id: 'zoeken', label: 'Zoeken' },
 ];
 
+function TorchIcon({ on }: { on: boolean }) {
+  return (
+    <Svg width={22} height={22} viewBox="0 0 24 24" fill={on ? C.cameraAccent : 'none'} stroke={on ? C.cameraAccent : '#fff'} strokeWidth={1.9} strokeLinejoin="round">
+      <Path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" />
+    </Svg>
+  );
+}
+
 export default function Scan() {
   const { meal } = useLocalSearchParams<{ meal?: string }>();
   const [mode, setMode] = useState<Mode>('barcode');
   const [permission, requestPermission] = useCameraPermissions();
   const [busy, setBusy] = useState<string | null>(null);
+  const [torch, setTorch] = useState(false);
+  const [typing, setTyping] = useState(false);
+  const [typed, setTyped] = useState('');
   const camera = useRef<CameraView>(null);
   const scanning = useRef(false);
+  const lastSeen = useRef<{ code: string; count: number }>({ code: '', count: 0 });
 
   const apiKey = useStore((s) => s.apiKey);
   const recents = useStore((s) => s.recents);
@@ -43,31 +57,83 @@ export default function Scan() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<FoodItem[] | null>(null);
 
+  const mealParam = meal ? { meal } : {};
+
   const open = (p: PendingFood) => {
     setPending(p);
-    router.replace({ pathname: '/product', params: meal ? { meal } : {} });
+    router.replace({ pathname: '/product', params: mealParam });
   };
 
-  const onBarcode = async (r: BarcodeScanningResult) => {
-    if (scanning.current || mode !== 'barcode') return;
+  const handleCode = async (code: string) => {
     scanning.current = true;
+    setTyping(false);
+
+    // 1. Eerst in de producten op deze gsm: meteen en zonder internet.
+    const saved = useStore.getState().products[code];
+    if (saved) {
+      open({ source: saved.own ? 'eigen' : 'barcode', items: [{ ...saved }] });
+      return;
+    }
+
+    // 2. Dan in Open Food Facts.
     setBusy('Product opzoeken…');
     try {
-      const item = await lookupBarcode(r.data);
-      if (item) {
-        open({ source: 'barcode', items: [item] });
+      const r = await lookupBarcode(code);
+      if (r.kind === 'found') {
+        useStore.getState().saveProduct(code, r.item);
+        open({ source: 'barcode', items: [r.item] });
         return;
       }
-      Alert.alert('Niet gevonden', 'Dit product staat nog niet in de database. Zoek het op naam of maak een foto.', [
-        { text: 'Zoeken', onPress: () => setMode('zoeken') },
-        { text: 'Opnieuw scannen' },
-      ]);
+      // 3. Niet (volledig) gevonden: één keer zelf invullen of het etiket laten lezen.
+      router.replace({
+        pathname: '/nieuw-product',
+        params: {
+          code,
+          reason: r.kind,
+          ...(r.kind === 'incomplete' && r.name ? { name: r.name } : {}),
+          ...(r.kind === 'incomplete' && r.brand ? { brand: r.brand } : {}),
+          ...(r.kind === 'incomplete' && r.portion ? { portion: String(r.portion) } : {}),
+          ...mealParam,
+        },
+      });
     } catch {
-      Alert.alert('Geen verbinding', 'Kon het product niet opzoeken. Controleer je internet en probeer opnieuw.');
+      Alert.alert(
+        'Geen verbinding',
+        'De productdatabase reageert niet. Controleer je internet, of vul het product zelf in.',
+        [
+          {
+            text: 'Zelf invullen',
+            onPress: () => router.replace({ pathname: '/nieuw-product', params: { code, reason: 'notfound', ...mealParam } }),
+          },
+          { text: 'Opnieuw', onPress: () => (scanning.current = false) },
+        ],
+        { cancelable: false },
+      );
     } finally {
       setBusy(null);
-      setTimeout(() => (scanning.current = false), 1500);
     }
+  };
+
+  const onBarcode = (r: BarcodeScanningResult) => {
+    if (scanning.current || mode !== 'barcode') return;
+    const code = r.data.replace(/\D/g, '');
+    if (!validBarcode(code)) return;
+    // Pas reageren als dezelfde code twee keer na elkaar gelezen is: voorkomt verkeerde lezingen.
+    if (lastSeen.current.code === code) lastSeen.current.count += 1;
+    else lastSeen.current = { code, count: 1 };
+    if (lastSeen.current.count < 2) return;
+    lastSeen.current = { code: '', count: 0 };
+    Vibration.vibrate(40);
+    handleCode(code);
+  };
+
+  const submitTyped = () => {
+    const code = typed.replace(/\D/g, '');
+    if (!validBarcode(code)) {
+      Alert.alert('Klopt niet', 'Typ alle cijfers onder de barcode over, meestal 13 (of 8).');
+      return;
+    }
+    handleCode(code);
   };
 
   const takePhoto = async () => {
@@ -126,13 +192,25 @@ export default function Scan() {
 
   const needsCamera = mode !== 'zoeken';
   const cameraReady = permission?.granted;
+  const showTorch = needsCamera && cameraReady && !(mode === 'foto' && !apiKey);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: C.camera }} edges={['top', 'bottom']}>
       <View style={st.top}>
         <IconButton icon="close" label="Sluiten" dark onPress={() => router.back()} />
         <Text style={st.heading}>Eten toevoegen</Text>
-        <View style={{ width: 44 }} />
+        {showTorch ? (
+          <Pressable
+            accessibilityRole="switch"
+            accessibilityLabel="Zaklamp"
+            accessibilityState={{ checked: torch }}
+            onPress={() => setTorch((t) => !t)}
+            style={st.torch}>
+            <TorchIcon on={torch} />
+          </Pressable>
+        ) : (
+          <View style={{ width: 44 }} />
+        )}
       </View>
 
       <View style={st.segment}>
@@ -141,7 +219,10 @@ export default function Scan() {
             key={m.id}
             accessibilityRole="tab"
             accessibilityState={{ selected: mode === m.id }}
-            onPress={() => setMode(m.id)}
+            onPress={() => {
+              setMode(m.id);
+              setTyping(false);
+            }}
             style={[st.segBtn, mode === m.id ? { backgroundColor: '#fff' } : null]}>
             <Text style={[st.segTxt, { color: mode === m.id ? C.camera : '#DDE8E0' }]}>{m.label}</Text>
           </Pressable>
@@ -172,10 +253,11 @@ export default function Scan() {
                 ref={camera}
                 style={StyleSheet.absoluteFill}
                 facing="back"
+                enableTorch={torch}
                 barcodeScannerSettings={{ barcodeTypes: ['ean13', 'ean8', 'upc_a', 'upc_e'] }}
                 onBarcodeScanned={mode === 'barcode' && !busy ? onBarcode : undefined}
               />
-              <View pointerEvents="none" style={[st.frame, mode === 'barcode' ? { width: 260, height: 150 } : { width: 270, height: 270 }]}>
+              <View pointerEvents="none" style={[st.frame, mode === 'barcode' ? { width: 280, height: 160 } : { width: 270, height: 270 }]}>
                 <View style={[st.corner, { top: -2, left: -2, borderTopWidth: 4, borderLeftWidth: 4, borderTopLeftRadius: 14 }]} />
                 <View style={[st.corner, { top: -2, right: -2, borderTopWidth: 4, borderRightWidth: 4, borderTopRightRadius: 14 }]} />
                 <View style={[st.corner, { bottom: -2, left: -2, borderBottomWidth: 4, borderLeftWidth: 4, borderBottomLeftRadius: 14 }]} />
@@ -183,11 +265,36 @@ export default function Scan() {
                 {mode === 'barcode' ? <View style={st.laser} /> : null}
               </View>
               <View style={st.hintBox}>
-                <Text style={st.hint}>
-                  {mode === 'barcode'
-                    ? 'Richt op de barcode van de verpakking. Voedingswaarden worden automatisch opgezocht.'
-                    : 'Maak een foto van je bord, van bovenaf. Je kan de porties daarna aanpassen.'}
-                </Text>
+                {mode === 'barcode' && typing ? (
+                  <View style={{ gap: 8 }}>
+                    <TextInput
+                      accessibilityLabel="Cijfers van de barcode"
+                      value={typed}
+                      onChangeText={(t) => setTyped(t.replace(/\D/g, ''))}
+                      onSubmitEditing={submitTyped}
+                      keyboardType="number-pad"
+                      placeholder="bv. 5410000000000"
+                      placeholderTextColor="#7E8F85"
+                      maxLength={14}
+                      autoFocus
+                      style={st.codeInput}
+                    />
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <Pressable onPress={() => setTyping(false)} style={[st.smallBtn, { borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' }]}>
+                        <Text style={[st.segTxt, { color: '#fff' }]}>Annuleren</Text>
+                      </Pressable>
+                      <Pressable onPress={submitTyped} style={[st.smallBtn, { backgroundColor: '#fff', flex: 1 }]}>
+                        <Text style={[st.segTxt, { color: C.camera }]}>Opzoeken</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                ) : (
+                  <Text style={st.hint}>
+                    {mode === 'barcode'
+                      ? 'Houd de barcode op ± 15 cm en recht in het kader. Te donker? Zet de zaklamp aan.'
+                      : 'Maak een foto van je bord, van bovenaf. Je kan de porties daarna aanpassen.'}
+                  </Text>
+                )}
               </View>
             </>
           )}
@@ -230,6 +337,15 @@ export default function Scan() {
             ListEmptyComponent={
               results && !busy ? <Text style={st.hint}>Niets gevonden. Probeer een ander woord of laat het inschatten.</Text> : null
             }
+            ListFooterComponent={
+              results ? (
+                <Pressable
+                  onPress={() => router.replace({ pathname: '/nieuw-product', params: { code: '', name: query.trim(), ...mealParam } })}
+                  style={[st.result, { justifyContent: 'center' }]}>
+                  <Text style={[st.segTxt, { color: C.cameraAccent }]}>Niet bij? Zelf een product invullen</Text>
+                </Pressable>
+              ) : null
+            }
             renderItem={({ item }) => (
               <Pressable onPress={() => open({ source: 'zoeken', items: [item] })} style={st.result}>
                 <View style={{ flex: 1 }}>
@@ -251,7 +367,12 @@ export default function Scan() {
             <View style={st.shutterInner} />
           </Pressable>
         ) : null}
-        {recents.length > 0 ? (
+        {mode === 'barcode' && cameraReady && !typing ? (
+          <Pressable accessibilityRole="button" onPress={() => setTyping(true)} style={st.typeBtn}>
+            <Text style={[st.segTxt, { color: '#fff' }]}>Lukt het niet? Typ de cijfers</Text>
+          </Pressable>
+        ) : null}
+        {recents.length > 0 && !typing ? (
           <View style={{ gap: 8, alignSelf: 'stretch' }}>
             <Text style={[st.resultSub, { fontSize: 13 }]}>Recent</Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -273,6 +394,7 @@ export default function Scan() {
 const st = StyleSheet.create({
   top: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12 },
   heading: { fontFamily: F.displaySemi, fontSize: 20, color: '#fff' },
+  torch: { width: 44, height: 44, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.12)', alignItems: 'center', justifyContent: 'center' },
   segment: { marginHorizontal: 16, flexDirection: 'row', gap: 4, backgroundColor: 'rgba(255,255,255,0.10)', borderRadius: 16, padding: 4 },
   segBtn: { flex: 1, minHeight: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   segTxt: { fontFamily: F.semi, fontSize: 14 },
@@ -281,12 +403,15 @@ const st = StyleSheet.create({
   frame: { position: 'relative' },
   corner: { position: 'absolute', width: 34, height: 34, borderColor: C.cameraAccent },
   laser: { position: 'absolute', left: 16, right: 16, top: '50%', height: 2, backgroundColor: C.cameraAccent },
-  hintBox: { position: 'absolute', bottom: 20, left: 20, right: 20, backgroundColor: 'rgba(15,21,18,0.75)', borderRadius: 16, padding: 12 },
+  hintBox: { position: 'absolute', bottom: 16, left: 16, right: 16, backgroundColor: 'rgba(15,21,18,0.8)', borderRadius: 16, padding: 12 },
   hint: { fontFamily: F.body, fontSize: 14, lineHeight: 20, color: '#fff', textAlign: 'center' },
+  codeInput: { minHeight: 48, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.12)', color: '#fff', paddingHorizontal: 14, fontFamily: F.semi, fontSize: 20, letterSpacing: 2 },
+  smallBtn: { minHeight: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14 },
   busy: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15,21,18,0.7)', alignItems: 'center', justifyContent: 'center' },
-  bottom: { paddingHorizontal: 16, paddingBottom: 16, gap: 16, alignItems: 'center' },
+  bottom: { paddingHorizontal: 16, paddingBottom: 16, gap: 14, alignItems: 'center' },
   shutter: { width: 76, height: 76, borderRadius: 38, borderWidth: 4, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' },
   shutterInner: { width: 58, height: 58, borderRadius: 29, backgroundColor: C.cameraAccent },
+  typeBtn: { minHeight: 44, paddingHorizontal: 18, borderRadius: 22, borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)', justifyContent: 'center' },
   recent: { minHeight: 40, paddingHorizontal: 14, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', maxWidth: '100%' },
   recentTxt: { fontFamily: F.body, fontSize: 14, color: '#fff' },
   searchRow: { flexDirection: 'row', gap: 8 },

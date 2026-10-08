@@ -38,6 +38,7 @@ export default function Instellingen() {
             entries: [],
             weights: [],
             recents: [],
+            products: {},
             apiKey: '',
             healthConnected: false,
             pending: null,

@@ -44,7 +44,7 @@ export interface FoodItem {
 }
 
 export interface PendingFood {
-  source: 'barcode' | 'foto' | 'zoeken' | 'schatting';
+  source: 'barcode' | 'foto' | 'zoeken' | 'schatting' | 'eigen';
   items: FoodItem[];
   note?: string;
 }
@@ -63,6 +63,20 @@ export interface Entry {
 export interface WeightLog {
   date: string;
   kg: number;
+}
+
+/** Een product dat op deze gsm bewaard wordt, op barcode. */
+export interface SavedProduct {
+  name: string;
+  brand?: string;
+  per100: Per100;
+  grams: number;
+  step: number;
+  servingLabel?: string;
+  imageUrl?: string;
+  /** Zelf ingevuld of van het etiket gelezen. */
+  own?: boolean;
+  savedAt: string;
 }
 
 export interface Recent {
@@ -86,6 +100,7 @@ interface State {
   healthConnected: boolean;
   apiKey: string;
   pending: PendingFood | null;
+  products: Record<string, SavedProduct>;
 
   setProfile: (p: Partial<Profile>) => void;
   setAnswers: (a: Partial<Answers>) => void;
@@ -98,6 +113,7 @@ interface State {
   setHealthConnected: (v: boolean) => void;
   setApiKey: (k: string) => void;
   setPending: (p: PendingFood | null) => void;
+  saveProduct: (code: string, item: FoodItem, own?: boolean) => void;
 }
 
 const defaultProfile: Profile = { name: '', age: 35, height: 175, weight: 85, target: 78, sex: 'man' };
@@ -137,6 +153,7 @@ export const useStore = create<State>()(
       healthConnected: false,
       apiKey: '',
       pending: null,
+      products: {},
 
       setProfile: (p) => set({ profile: { ...get().profile, ...p } }),
       setAnswers: (a) => set({ answers: { ...get().answers, ...a } }),
@@ -194,6 +211,32 @@ export const useStore = create<State>()(
       setHealthConnected: (healthConnected) => set({ healthConnected }),
       setApiKey: (apiKey) => set({ apiKey: apiKey.trim() }),
       setPending: (pending) => set({ pending }),
+      saveProduct: (code, item, own) => {
+        const all = { ...get().products };
+        // Een eigen product nooit overschrijven met gegevens uit de database.
+        if (all[code]?.own && !own) return;
+        all[code] = {
+          name: item.name,
+          brand: item.brand,
+          per100: item.per100,
+          grams: item.grams,
+          step: item.step,
+          servingLabel: item.servingLabel,
+          imageUrl: item.imageUrl,
+          own,
+          savedAt: new Date().toISOString(),
+        };
+        // Maximaal 400 producten bewaren; eigen producten blijven altijd.
+        const keys = Object.keys(all);
+        if (keys.length > 400) {
+          keys
+            .filter((k) => !all[k].own)
+            .sort((a, b) => all[a].savedAt.localeCompare(all[b].savedAt))
+            .slice(0, keys.length - 400)
+            .forEach((k) => delete all[k]);
+        }
+        set({ products: all });
+      },
     }),
     {
       name: 'licht-data',
