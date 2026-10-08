@@ -1,5 +1,6 @@
 import { router } from 'expo-router';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { useEffect } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { fmt, fmt1, greeting, longDate, todayKey } from '@/calc';
 import { useTodayActivity } from '@/health';
@@ -24,17 +25,32 @@ export default function Vandaag() {
   const name = useStore((s) => s.profile.name);
   const weights = useStore((s) => s.weights);
   const removeEntry = useStore((s) => s.removeEntry);
+  const lastDeleted = useStore((s) => s.lastDeleted);
+  const restoreEntry = useStore((s) => s.restoreEntry);
+  const clearLastDeleted = useStore((s) => s.clearLastDeleted);
   const change = weekChange(weights);
   const over = sum.remaining < 0;
 
-  const confirmDelete = (id: string, label: string) =>
-    Alert.alert('Verwijderen?', `${label} uit je dagboek halen?`, [
-      { text: 'Annuleren', style: 'cancel' },
-      { text: 'Verwijderen', style: 'destructive', onPress: () => removeEntry(id) },
-    ]);
+  // De "ongedaan maken"-balk verdwijnt na 6 seconden.
+  useEffect(() => {
+    if (!lastDeleted) return;
+    const t = setTimeout(clearLastDeleted, 6000);
+    return () => clearTimeout(t);
+  }, [lastDeleted, clearLastDeleted]);
+
+  const undoBar = lastDeleted ? (
+    <View style={st.undo}>
+      <Text style={st.undoText} numberOfLines={1}>
+        {lastDeleted.name} verwijderd
+      </Text>
+      <Pressable accessibilityRole="button" onPress={() => restoreEntry(lastDeleted)} style={st.undoBtn} hitSlop={6}>
+        <Text style={[st.undoText, { flex: 0, fontFamily: F.bold, color: C.cameraAccent }]}>Ongedaan maken</Text>
+      </Pressable>
+    </View>
+  ) : undefined;
 
   return (
-    <Screen>
+    <Screen footer={undoBar}>
       <Row style={{ justifyContent: 'space-between', alignItems: 'flex-end', paddingTop: 8 }}>
         <View style={{ gap: 2, flex: 1 }}>
           <Muted>{longDate()}</Muted>
@@ -140,20 +156,34 @@ export default function Vandaag() {
                 </Pressable>
               </Row>
               {items.map((e) => (
-                <Pressable
-                  key={e.id}
-                  onLongPress={() => confirmDelete(e.id, e.name)}
-                  accessibilityHint="Lang indrukken om te verwijderen"
-                  style={st.entry}>
-                  <Muted style={{ flex: 1, fontSize: 14 }} >{e.name}</Muted>
-                  <Muted style={{ fontSize: 14 }}>{fmt(e.kcal)}</Muted>
-                </Pressable>
+                <View key={e.id} style={st.entry}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityHint="Tik om de hoeveelheid of maaltijd aan te passen"
+                    onPress={() => router.push({ pathname: '/item', params: { id: e.id } })}
+                    style={st.entryMain}>
+                    <View style={{ flex: 1 }}>
+                      <Body style={{ fontSize: 14 }} numberOfLines={2}>
+                        {e.name}
+                      </Body>
+                      {e.grams !== undefined ? <Muted style={{ fontSize: 12 }}>{Math.round(e.grams)} g</Muted> : null}
+                    </View>
+                    <Muted style={{ fontSize: 14 }}>{fmt(e.kcal)}</Muted>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`${e.name} verwijderen`}
+                    onPress={() => removeEntry(e.id)}
+                    style={st.trash}>
+                    <Icon name="trash" color={C.muted} size={20} />
+                  </Pressable>
+                </View>
               ))}
               {items.length ? <View style={{ height: 8 }} /> : null}
             </Card>
           );
         })}
-        <Muted style={{ fontSize: 12, textAlign: 'center' }}>Lang indrukken op een item om het te verwijderen.</Muted>
+        <Muted style={{ fontSize: 12, textAlign: 'center' }}>Tik op een item om het aan te passen.</Muted>
       </View>
     </Screen>
   );
@@ -163,5 +193,10 @@ const st = StyleSheet.create({
   big: { fontFamily: F.display, fontSize: 34, lineHeight: 38, letterSpacing: -1 },
   blueIcon: { width: 44, height: 44, borderRadius: 14, backgroundColor: C.blue, alignItems: 'center', justifyContent: 'center' },
   add: { width: 44, height: 44, borderRadius: 14, backgroundColor: C.greenSoft, alignItems: 'center', justifyContent: 'center' },
-  entry: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 6, gap: 12, minHeight: 36, alignItems: 'center' },
+  entry: { flexDirection: 'row', alignItems: 'center', paddingLeft: 16, paddingRight: 6, borderTopWidth: 1, borderTopColor: C.bg },
+  entryMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 48, paddingVertical: 6 },
+  trash: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 12 },
+  undo: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: C.dark, borderRadius: 16, paddingLeft: 16, paddingRight: 6, minHeight: 52 },
+  undoText: { flex: 1, fontFamily: F.body, fontSize: 14, color: '#fff' },
+  undoBtn: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 10 },
 });

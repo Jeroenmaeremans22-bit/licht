@@ -25,8 +25,20 @@ export function Title({ children, style }: { children: ReactNode; style?: StyleP
 export function H2({ children, style }: { children: ReactNode; style?: StyleProp<TextStyle> }) {
   return <Text style={[s.h2, style]}>{children}</Text>;
 }
-export function Body({ children, style }: { children: ReactNode; style?: StyleProp<TextStyle> }) {
-  return <Text style={[s.body, style]}>{children}</Text>;
+export function Body({
+  children,
+  style,
+  numberOfLines,
+}: {
+  children: ReactNode;
+  style?: StyleProp<TextStyle>;
+  numberOfLines?: number;
+}) {
+  return (
+    <Text style={[s.body, style]} numberOfLines={numberOfLines}>
+      {children}
+    </Text>
+  );
 }
 export function Muted({ children, style }: { children: ReactNode; style?: StyleProp<TextStyle> }) {
   return <Text style={[s.muted, style]}>{children}</Text>;

@@ -58,6 +58,10 @@ export interface Entry {
   protein: number;
   carbs: number;
   fat: number;
+  /** Bewaard sinds versie 1.2, zodat je de hoeveelheid achteraf kan aanpassen. */
+  grams?: number;
+  step?: number;
+  per100?: Per100;
 }
 
 export interface WeightLog {
@@ -101,6 +105,8 @@ interface State {
   apiKey: string;
   pending: PendingFood | null;
   products: Record<string, SavedProduct>;
+  /** Laatst verwijderd item, om het ongedaan te kunnen maken (niet bewaard). */
+  lastDeleted: Entry | null;
 
   setProfile: (p: Partial<Profile>) => void;
   setAnswers: (a: Partial<Answers>) => void;
@@ -109,6 +115,9 @@ interface State {
   restartOnboarding: () => void;
   addEntries: (meal: Meal, items: FoodItem[]) => void;
   removeEntry: (id: string) => void;
+  restoreEntry: (e: Entry) => void;
+  clearLastDeleted: () => void;
+  updateEntry: (id: string, patch: { grams?: number; meal?: Meal }) => void;
   logWeight: (kg: number) => void;
   setHealthConnected: (v: boolean) => void;
   setApiKey: (k: string) => void;
@@ -154,6 +163,7 @@ export const useStore = create<State>()(
       apiKey: '',
       pending: null,
       products: {},
+      lastDeleted: null,
 
       setProfile: (p) => set({ profile: { ...get().profile, ...p } }),
       setAnswers: (a) => set({ answers: { ...get().answers, ...a } }),
@@ -183,6 +193,9 @@ export const useStore = create<State>()(
               protein: t.protein,
               carbs: t.carbs,
               fat: t.fat,
+              grams: i.grams,
+              step: i.step,
+              per100: i.per100,
             };
           });
         const recents = [
@@ -203,7 +216,32 @@ export const useStore = create<State>()(
           recents,
         });
       },
-      removeEntry: (id) => set({ entries: get().entries.filter((e) => e.id !== id) }),
+      removeEntry: (id) =>
+        set({
+          lastDeleted: get().entries.find((e) => e.id === id) ?? null,
+          entries: get().entries.filter((e) => e.id !== id),
+        }),
+      restoreEntry: (e) => {
+        if (get().entries.some((x) => x.id === e.id)) return set({ lastDeleted: null });
+        set({ entries: [...get().entries, e], lastDeleted: null });
+      },
+      clearLastDeleted: () => set({ lastDeleted: null }),
+      updateEntry: (id, patch) =>
+        set({
+          entries: get().entries.map((e) => {
+            if (e.id !== id) return e;
+            const next = { ...e, ...(patch.meal ? { meal: patch.meal } : {}) };
+            if (patch.grams !== undefined && e.per100) {
+              const f = patch.grams / 100;
+              next.grams = patch.grams;
+              next.kcal = Math.round(e.per100.kcal * f);
+              next.protein = e.per100.protein * f;
+              next.carbs = e.per100.carbs * f;
+              next.fat = e.per100.fat * f;
+            }
+            return next;
+          }),
+        }),
       logWeight: (kg) => {
         const date = todayKey();
         set({ weights: [...get().weights.filter((w) => w.date !== date), { date, kg }] });
@@ -243,7 +281,7 @@ export const useStore = create<State>()(
       version: 1,
       storage: createJSONStorage(() => AsyncStorage),
       partialize: (s) => {
-        const { pending, ...rest } = s;
+        const { pending, lastDeleted, ...rest } = s;
         return rest;
       },
     },

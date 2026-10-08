@@ -46,6 +46,7 @@ export default function RootLayout() {
         <Stack.Screen name="scan" options={{ presentation: 'fullScreenModal', contentStyle: { backgroundColor: C.camera } }} />
         <Stack.Screen name="product" />
         <Stack.Screen name="nieuw-product" />
+        <Stack.Screen name="item" />
         <Stack.Screen name="instellingen" />
       </Stack>
     </>
